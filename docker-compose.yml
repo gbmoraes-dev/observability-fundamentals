@@ -1,0 +1,65 @@
+services:
+  loki:
+    image: grafana/loki:latest
+    container_name: loki
+    restart: always
+    ports:
+      - 3100:3100
+      - 7946
+      - 9095
+
+  tempo:
+    image: grafana/tempo:latest
+    container_name: tempo
+    restart: always
+    ports:
+      - 4327:4317
+      - 4328:4318
+    command: ["-config.file=/etc/tempo.yml"]
+    volumes:
+      - ./config/tempo/tempo.yml:/etc/tempo.yml
+
+  mimir:
+    image: grafana/mimir:latest
+    container_name: mimir
+    restart: always
+    ports:
+      - 9090:9090
+    command: ["-config.file=/etc/mimir.yml"]
+    volumes:
+      - ./config/mimir/mimir.yml:/etc/mimir.yml
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: always
+    ports:
+      - 3000:3000
+    volumes:
+      - ./config/grafana/datasources.yml:/etc/grafana/provisioning/datasources/datasources.yml
+    environment:
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_DISABLED_FORM_LOGIN=true
+      - GF_SECURITY_ALLOW_EMBEDDING=true
+    depends_on:
+      - loki
+      - tempo
+      - mimir
+
+  otel:
+    image: otel/opentelemetry-collector-contrib:latest
+    container_name: otel
+    restart: always
+    ports:
+      - 4317:4317
+      - 4318:4318
+      - 8888:8888
+    command: ["--config=etc/otelcol/config.yml"]
+    volumes:
+      - ./config/otel/otel.yml:/etc/otelcol/config.yml
+    depends_on:
+      - loki
+      - tempo
+      - mimir
+      - grafana
