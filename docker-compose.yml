@@ -3,18 +3,25 @@ services:
     image: grafana/loki:latest
     container_name: loki
     restart: always
+    command: ["-config.file=/etc/loki.yml", "-config.expand-env=true"]
+    volumes:
+      - ./config/loki/loki.yml:/etc/loki.yml
     ports:
       - 3100:3100
       - 7946
       - 9095
+    depends_on:
+      minio:
+        condition: service_healthy
 
   tempo:
     image: grafana/tempo:latest
     container_name: tempo
     restart: always
-    ports:
-      - 4327:4317
-      - 4328:4318
+    expose:
+      - 3200
+      - 4217
+      - 4318
     command: ["-config.file=/etc/tempo.yml"]
     volumes:
       - ./config/tempo/tempo.yml:/etc/tempo.yml
@@ -24,10 +31,50 @@ services:
     container_name: mimir
     restart: always
     ports:
-      - 9090:9090
+      - 9008:9008
+      - 9009:9009
     command: ["-config.file=/etc/mimir.yml"]
     volumes:
       - ./config/mimir/mimir.yml:/etc/mimir.yml
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: always
+    ports:
+      - 9090:9090
+    command:
+      [
+        "--web.enable-remote-write-receiver",
+        "--config.file=/etc/prometheus/prometheus.yml",
+      ]
+    volumes:
+      - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    restart: always
+    ports:
+      - 9000:9000
+      - 9001:9001
+    entrypoint:
+      - sh
+      - -euc
+      - |
+        mkdir -p /data/loki-data && \
+        mkdir -p /data/loki-ruler && \
+        minio server /data --console-address ':9001'
+    volumes:
+      - ./minio-data:/data
+    environment:
+      - MINIO_ROOT_USER=loki
+      - MINIO_ROOT_PASSWORD=loki1234
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   grafana:
     image: grafana/grafana:latest
@@ -40,26 +87,36 @@ services:
     environment:
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
       - GF_AUTH_ANONYMOUS_ENABLED=true
-      - GF_AUTH_DISABLED_FORM_LOGIN=true
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+      - GF_AUTH_BASIC_ENABLED=false
       - GF_SECURITY_ALLOW_EMBEDDING=true
     depends_on:
       - loki
       - tempo
       - mimir
+      - prometheus
 
   otel:
     image: otel/opentelemetry-collector-contrib:latest
     container_name: otel
     restart: always
     ports:
-      - 4317:4317
-      - 4318:4318
-      - 8888:8888
-    command: ["--config=etc/otelcol/config.yml"]
+      - 4317:4317 # gRPC
+      - 4318:4318 # HTTP
+      - 8888:8888 # Prometheus Collector
+      - 8889:8889 # Prometheus Exporter
+      - 13133:13133 # Health Check
+      - 55679:55679 # ZPages
+      - 1888:1888 # PPROF
+    command: ["--config=/etc/otelcol/config.yml"]
     volumes:
       - ./config/otel/otel.yml:/etc/otelcol/config.yml
     depends_on:
       - loki
       - tempo
       - mimir
+      - prometheus
       - grafana
+
+volumes:
+  minio-data:
